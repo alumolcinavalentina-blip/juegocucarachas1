@@ -1,0 +1,374 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Room Cleaner</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: #1a1a2e;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    min-height: 100vh;
+    font-family: 'Courier New', monospace;
+    color: #eee;
+  }
+  h1 {
+    font-size: 1.8rem;
+    letter-spacing: 4px;
+    color: #f0a500;
+    text-shadow: 0 0 20px #f0a50088;
+    margin-bottom: 8px;
+  }
+  #hud {
+    display: flex;
+    gap: 40px;
+    margin-bottom: 8px;
+    font-size: 0.95rem;
+    letter-spacing: 2px;
+  }
+  #hud span { color: #f0a500; font-weight: bold; }
+  #wrapper { position: relative; }
+  canvas { display: block; border: 3px solid #f0a50088; }
+  #overlay {
+    display: none;
+    position: absolute;
+    top: 0; left: 0;
+    width: 100%; height: 100%;
+    background: rgba(0,0,0,0.82);
+    align-items: center;
+    justify-content: center;
+    flex-direction: column;
+    gap: 16px;
+    text-align: center;
+    padding: 20px;
+  }
+  #overlay.visible { display: flex; }
+  #overlay h2 { font-size: 2rem; letter-spacing: 4px; color: #f0a500; }
+  #overlay p  { font-size: 1rem; color: #ccc; letter-spacing: 1px; line-height: 1.8; }
+  #overlay button {
+    margin-top: 8px;
+    padding: 12px 36px;
+    background: #f0a500;
+    border: none;
+    color: #1a1a2e;
+    font-family: 'Courier New', monospace;
+    font-size: 1rem;
+    font-weight: bold;
+    letter-spacing: 2px;
+    cursor: pointer;
+  }
+  #controles {
+    margin-top: 8px;
+    font-size: 0.72rem;
+    color: #555;
+    letter-spacing: 1px;
+  }
+</style>
+</head>
+<body>
+
+<h1>🪲 ROOM CLEANER</h1>
+<div id="hud">
+  <div>CUCARACHAS: <span id="hud-bichos">0</span></div>
+  <div>TIEMPO: <span id="hud-tiempo">60</span>s</div>
+  <div>ELIMINADAS: <span id="hud-muertas">0</span></div>
+</div>
+
+<div id="wrapper">
+  <canvas id="canvas" width="800" height="600"></canvas>
+  <div id="overlay" class="visible">
+    <h2 id="overlay-titulo">🪲 ROOM CLEANER</h2>
+    <p id="overlay-texto">Elimina todas las cucarachas antes de que se reproduzcan.<br>Muévete con las flechas o WASD.<br>Clica sobre las cucarachas para matarlas.</p>
+    <button onclick="iniciarJuego()">▶ JUGAR</button>
+  </div>
+</div>
+<div id="controles">MOVER: flechas / WASD &nbsp;|&nbsp; MATAR: clic sobre la cucaracha</div>
+
+<script>
+const canvas = document.getElementById('canvas');
+const ctx    = canvas.getContext('2d');
+const W = canvas.width, H = canvas.height;
+
+// ─── IMÁGENES ─────────────────────────────────────────────
+const imgPersonaje = new Image(); imgPersonaje.src = 'personajeframes.png';
+const imgCucaracha = new Image(); imgCucaracha.src = 'cucarachas.png';
+const imgMueble    = new Image(); imgMueble.src    = 'mueble.png';
+
+// ─── SPRITESHEET PERSONAJE: 4 cols x 4 filas, 270x270 cada frame ──
+const P_FW = 270, P_FH = 270, P_COLS = 4;
+const P_DIR = { up:0, down:1, left:2, right:3 };
+
+// ─── SPRITESHEET CUCARACHA: 2 cols x 2 filas, ~590x590 cada frame ──
+const C_FW = 1181/2, C_FH = 1181/2;
+const C_DIRS = [
+  {col:0, fila:0, dx:-1, dy:-1}, // ↖ arriba-izq
+  {col:1, fila:0, dx: 1, dy:-1}, // ↗ arriba-der
+  {col:0, fila:1, dx:-1, dy: 1}, // ↙ abajo-izq
+  {col:1, fila:1, dx: 1, dy: 1}, // ↘ abajo-der
+];
+
+// ─── MUEBLE: 2 cols x 2 filas ─────────────────────────────
+const M_FW = 1080/2, M_FH = 1080/2;
+const MUEBLE_W = 90, MUEBLE_H = 90;
+
+// ─── ESTADO ───────────────────────────────────────────────
+let jugador, cucarachas, muebles, teclas, estado;
+let tiempoRestante, ultimoSegundo, spawnTimer, muertasTotal;
+
+function iniciarJuego() {
+  document.getElementById('overlay').classList.remove('visible');
+  teclas        = {};
+  tiempoRestante = 60;
+  ultimoSegundo  = performance.now();
+  spawnTimer     = 0;
+  muertasTotal   = 0;
+
+  jugador = {
+    x: W/2 - 30, y: H/2 - 30,
+    w: 60, h: 60,
+    speed: 2.5,
+    dir: P_DIR.down,
+    frame: 0, frameTimer: 0,
+    moviendose: false
+  };
+
+  muebles    = generarMuebles();
+  cucarachas = [];
+  for (let i = 0; i < 5; i++) spawnCucaracha();
+
+  estado = 'jugando';
+  requestAnimationFrame(loop);
+}
+
+// ─── MUEBLES ALEATORIOS ───────────────────────────────────
+function generarMuebles() {
+  const lista = [], cantidad = 5 + Math.floor(Math.random() * 3);
+  const margen = 80;
+  for (let i = 0; i < cantidad; i++) {
+    let m, intentos = 0, ok;
+    do {
+      ok = true;
+      m = {
+        x: margen + Math.random() * (W - margen*2 - MUEBLE_W),
+        y: margen + Math.random() * (H - margen*2 - MUEBLE_H),
+        w: MUEBLE_W, h: MUEBLE_H,
+        orient: Math.floor(Math.random() * 4)
+      };
+      for (const o of lista) if (rectOverlap(m, o, 20)) { ok = false; break; }
+      if (rectOverlap(m, {x:W/2-80, y:H/2-80, w:160, h:160}, 0)) ok = false;
+      intentos++;
+    } while (!ok && intentos < 60);
+    if (ok) lista.push(m);
+  }
+  return lista;
+}
+
+// ─── SPAWN CUCARACHA ──────────────────────────────────────
+function spawnCucaracha() {
+  let x, y;
+  do {
+    x = 30 + Math.random() * (W - 60);
+    y = 30 + Math.random() * (H - 60);
+  } while (dist(x, y, jugador.x, jugador.y) < 150);
+
+  cucarachas.push({
+    x, y, w: 40, h: 40,
+    dirIdx: Math.floor(Math.random() * 4),
+    speed: 0.8 + Math.random() * 0.7,
+    viva: true
+  });
+}
+
+// ─── LOOP ─────────────────────────────────────────────────
+function loop(ts) {
+  if (estado !== 'jugando') return;
+  requestAnimationFrame(loop);
+
+  if (ts - ultimoSegundo >= 1000) {
+    tiempoRestante--;
+    ultimoSegundo = ts;
+    spawnTimer++;
+    if (spawnTimer % 8 === 0 && cucarachas.filter(c=>c.viva).length < 20) spawnCucaracha();
+    if (tiempoRestante <= 0) { finJuego(false); return; }
+  }
+
+  actualizarJugador();
+  actualizarCucarachas();
+
+  const vivas = cucarachas.filter(c => c.viva).length;
+  if (vivas === 0 && muertasTotal >= 5) { finJuego(true); return; }
+
+  dibujar();
+  actualizarHUD(vivas);
+}
+
+// ─── JUGADOR ──────────────────────────────────────────────
+window.addEventListener('keydown', e => { teclas[e.key] = true;  if(['ArrowUp','ArrowDown','ArrowLeft','ArrowRight'].includes(e.key)) e.preventDefault(); });
+window.addEventListener('keyup',   e => { teclas[e.key] = false; });
+
+function actualizarJugador() {
+  let dx = 0, dy = 0;
+  if (teclas['ArrowUp']    || teclas['w']) { dy = -1; jugador.dir = P_DIR.up;    }
+  if (teclas['ArrowDown']  || teclas['s']) { dy =  1; jugador.dir = P_DIR.down;  }
+  if (teclas['ArrowLeft']  || teclas['a']) { dx = -1; jugador.dir = P_DIR.left;  }
+  if (teclas['ArrowRight'] || teclas['d']) { dx =  1; jugador.dir = P_DIR.right; }
+
+  jugador.moviendose = (dx !== 0 || dy !== 0);
+
+  if (jugador.moviendose) {
+    const nx = Math.max(12, Math.min(W - jugador.w - 12, jugador.x + dx * jugador.speed));
+    const ny = Math.max(12, Math.min(H - jugador.h - 12, jugador.y + dy * jugador.speed));
+    let colX = false, colY = false;
+    for (const m of muebles) {
+      if (rectOverlap({x:nx, y:jugador.y, w:jugador.w, h:jugador.h}, m, 0)) colX = true;
+      if (rectOverlap({x:jugador.x, y:ny, w:jugador.w, h:jugador.h}, m, 0)) colY = true;
+    }
+    if (!colX) jugador.x = nx;
+    if (!colY) jugador.y = ny;
+
+    jugador.frameTimer++;
+    if (jugador.frameTimer >= 6) { jugador.frame = (jugador.frame + 1) % P_COLS; jugador.frameTimer = 0; }
+  } else {
+    jugador.frame = 0;
+  }
+}
+
+// ─── CUCARACHAS ───────────────────────────────────────────
+function actualizarCucarachas() {
+  for (const c of cucarachas) {
+    if (!c.viva) continue;
+    const d = C_DIRS[c.dirIdx];
+    const nx = c.x + d.dx * c.speed;
+    const ny = c.y + d.dy * c.speed;
+    let rebotar = false;
+    if (nx < 12 || nx > W - c.w - 12 || ny < 12 || ny > H - c.h - 12) rebotar = true;
+    for (const m of muebles) {
+      if (rectOverlap({x:nx, y:ny, w:c.w, h:c.h}, m, 0)) { rebotar = true; break; }
+    }
+    if (rebotar) {
+      c.dirIdx = Math.floor(Math.random() * 4);
+    } else {
+      c.x = nx; c.y = ny;
+    }
+  }
+}
+
+// ─── CLIC PARA MATAR ──────────────────────────────────────
+canvas.addEventListener('click', e => {
+  if (estado !== 'jugando') return;
+  const r  = canvas.getBoundingClientRect();
+  const mx = e.clientX - r.left;
+  const my = e.clientY - r.top;
+  for (const c of cucarachas) {
+    if (!c.viva) continue;
+    if (mx >= c.x && mx <= c.x+c.w && my >= c.y && my <= c.y+c.h) {
+      if (dist(mx, my, jugador.x+jugador.w/2, jugador.y+jugador.h/2) < 130) {
+        c.viva = false;
+        muertasTotal++;
+      }
+    }
+  }
+});
+
+// ─── DIBUJO ───────────────────────────────────────────────
+function dibujar() {
+  // Suelo parqué
+  ctx.fillStyle = '#c4a882';
+  ctx.fillRect(0, 0, W, H);
+  ctx.strokeStyle = '#b0906a';
+  ctx.lineWidth = 1;
+  for (let x = 0; x < W; x += 60) { ctx.beginPath(); ctx.moveTo(x,0); ctx.lineTo(x,H); ctx.stroke(); }
+  for (let y = 0; y < H; y += 40) { ctx.beginPath(); ctx.moveTo(0,y); ctx.lineTo(W,y); ctx.stroke(); }
+
+  // Paredes
+  ctx.fillStyle = '#7a5c38';
+  ctx.fillRect(0,0,W,12); ctx.fillRect(0,H-12,W,12);
+  ctx.fillRect(0,0,12,H); ctx.fillRect(W-12,0,12,H);
+
+  // Muebles
+  for (const m of muebles) dibujarMueble(m);
+
+  // Cucarachas muertas
+  for (const c of cucarachas) {
+    if (c.viva) continue;
+    ctx.globalAlpha = 0.35;
+    ctx.fillStyle = '#2a0a00';
+    ctx.beginPath();
+    ctx.ellipse(c.x+c.w/2, c.y+c.h/2, c.w/2, c.h/3, 0, 0, Math.PI*2);
+    ctx.fill();
+    ctx.globalAlpha = 1;
+  }
+
+  // Cucarachas vivas
+  for (const c of cucarachas) { if (c.viva) dibujarCucaracha(c); }
+
+  // Jugador
+  dibujarJugador();
+}
+
+function dibujarMueble(m) {
+  if (imgMueble.complete && imgMueble.naturalWidth > 0) {
+    const col  = m.orient % 2;
+    const fila = Math.floor(m.orient / 2);
+    ctx.drawImage(imgMueble, col*M_FW, fila*M_FH, M_FW, M_FH, m.x, m.y, m.w, m.h);
+  } else {
+    ctx.fillStyle = '#8B4513';
+    ctx.fillRect(m.x, m.y, m.w, m.h);
+    ctx.fillStyle = '#fff';
+    ctx.font = '10px Courier New';
+    ctx.fillText('mueble', m.x+5, m.y+15);
+  }
+}
+
+function dibujarCucaracha(c) {
+  if (imgCucaracha.complete && imgCucaracha.naturalWidth > 0) {
+    const d = C_DIRS[c.dirIdx];
+    ctx.drawImage(imgCucaracha, d.col*C_FW, d.fila*C_FH, C_FW, C_FH, c.x-10, c.y-10, c.w+20, c.h+20);
+  } else {
+    ctx.fillStyle = '#5a3010';
+    ctx.beginPath();
+    ctx.ellipse(c.x+c.w/2, c.y+c.h/2, c.w/2, c.h/3, 0, 0, Math.PI*2);
+    ctx.fill();
+  }
+}
+
+function dibujarJugador() {
+  if (imgPersonaje.complete && imgPersonaje.naturalWidth > 0) {
+    ctx.drawImage(imgPersonaje,
+      jugador.frame * P_FW, jugador.dir * P_FH, P_FW, P_FH,
+      jugador.x - 15, jugador.y - 15, jugador.w + 30, jugador.h + 30);
+  } else {
+    ctx.fillStyle = '#3399ff';
+    ctx.fillRect(jugador.x, jugador.y, jugador.w, jugador.h);
+  }
+}
+
+function actualizarHUD(vivas) {
+  document.getElementById('hud-bichos').textContent  = vivas;
+  document.getElementById('hud-tiempo').textContent  = tiempoRestante;
+  document.getElementById('hud-muertas').textContent = muertasTotal;
+}
+
+function finJuego(victoria) {
+  estado = 'fin';
+  document.getElementById('overlay-titulo').textContent = victoria ? '🏆 ¡LIMPIO!' : '💀 GAME OVER';
+  document.getElementById('overlay-texto').textContent  = victoria
+    ? `¡Eliminaste todas las cucarachas!\nTotal eliminadas: ${muertasTotal}`
+    : `Se te acabó el tiempo.\nEliminaste ${muertasTotal} cucarachas.`;
+  document.getElementById('overlay').classList.add('visible');
+}
+
+function rectOverlap(a, b, margin) {
+  return a.x < b.x+b.w+margin && a.x+a.w > b.x-margin &&
+         a.y < b.y+b.h+margin && a.y+a.h > b.y-margin;
+}
+function dist(x1,y1,x2,y2) {
+  return Math.sqrt((x2-x1)**2+(y2-y1)**2);
+}
+</script>
+</body>
+</html>
