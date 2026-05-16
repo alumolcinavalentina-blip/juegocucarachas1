@@ -265,11 +265,13 @@ canvas.addEventListener('click', e => {
   const my = e.clientY - r.top;
   for (const c of cucarachas) {
     if (!c.viva) continue;
-    if (mx >= c.x && mx <= c.x+c.w && my >= c.y && my <= c.y+c.h) {
-      if (dist(mx, my, jugador.x+jugador.w/2, jugador.y+jugador.h/2) < 130) {
-        c.viva = false;
-        muertasTotal++;
-      }
+    // Área de clic ampliada (el sprite es grande por el fondo negro)
+    const margen = 30;
+    if (mx >= c.x - margen && mx <= c.x + c.w + margen &&
+        my >= c.y - margen && my <= c.y + c.h + margen) {
+      c.viva = false;
+      muertasTotal++;
+      break;
     }
   }
 });
